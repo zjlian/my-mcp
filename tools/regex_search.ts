@@ -53,12 +53,14 @@ export const regexSearchTool = {
             cwd: path,
             absolute: true,
             onlyFiles: true,
+            gitignore: true,
           });
         }
       } catch {
         files = await globby(path, {
           absolute: true,
           onlyFiles: true,
+          gitignore: true,
         });
       }
 
@@ -147,4 +149,3 @@ export const regexSearchTool = {
     }
   },
 };
-
