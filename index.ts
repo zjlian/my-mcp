@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { regexSearchTool } from "./tools/regex_search.js";
 import { outlineTool } from "./tools/outline.js";
+import { writeReportTool } from "./tools/write_report.js";
 
 const server = new McpServer({
   name: "my-mcp-server",
@@ -12,6 +13,7 @@ const server = new McpServer({
 
 server.registerTool(regexSearchTool.name, regexSearchTool.options, regexSearchTool.handler);
 server.registerTool(outlineTool.name, outlineTool.options, outlineTool.handler);
+server.registerTool(writeReportTool.name, writeReportTool.options, writeReportTool.handler);
 
 async function main() {
   const transport = new StdioServerTransport();

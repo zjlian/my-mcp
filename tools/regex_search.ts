@@ -2,6 +2,14 @@ import { globby } from "globby";
 import { readFile, stat } from "fs/promises";
 import { z } from "zod";
 
+const isBinaryBuffer = (buffer: Uint8Array): boolean => {
+  const length = Math.min(buffer.length, 4096);
+  for (let i = 0; i < length; i++) {
+    if (buffer[i] === 0) return true;
+  }
+  return false;
+};
+
 export const regexSearchTool = {
   name: "regex_search",
   options: {
@@ -68,36 +76,53 @@ export const regexSearchTool = {
       let filesProcessed = 0;
       const regex = new RegExp(pattern, ignore_case ? "i" : "");
 
-      for (const file of files) {
-        if (filesProcessed >= max_files) break;
+      const maxFileSizeBytes = 5 * 1024 * 1024;
+      const concurrency = 8;
+      let index = 0;
+
+      const processFile = async (file: string) => {
+        if (filesProcessed >= max_files) return;
+        if (timedOut) return;
         if (Date.now() - startTime > timeoutMs) {
           timedOut = true;
-          break;
+          return;
         }
 
-        const content = await readFile(file, "utf-8");
+        let fileStats;
+        try {
+          fileStats = await stat(file);
+        } catch {
+          return;
+        }
+
+        if (!fileStats.isFile()) return;
+        if (fileStats.size === 0) return;
+        if (fileStats.size > maxFileSizeBytes) return;
+
+        const buffer = await readFile(file);
+        if (buffer.length === 0) return;
+        if (isBinaryBuffer(buffer)) return;
+        const content = buffer.toString("utf-8");
         const lines = content.split("\n");
         const matches: string[] = [];
         let firstMatchLine: number | null = null;
 
-        for (let index = 0; index < lines.length; index++) {
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
           if (Date.now() - startTime > timeoutMs) {
             timedOut = true;
             break;
           }
-          const line = lines[index];
-          if (line === undefined) {
-            continue;
-          }
+          const line = lines[lineIndex];
+          if (line === undefined) continue;
           if (regex.test(line)) {
             if (firstMatchLine === null) {
-              firstMatchLine = index + 1;
+              firstMatchLine = lineIndex + 1;
             }
-            const start = Math.max(0, index - context_lines);
-            const end = Math.min(lines.length, index + context_lines + 1);
+            const start = Math.max(0, lineIndex - context_lines);
+            const end = Math.min(lines.length, lineIndex + context_lines + 1);
 
             for (let i = start; i < end; i++) {
-              const prefix = i === index ? "> " : "  ";
+              const prefix = i === lineIndex ? "> " : "  ";
               const lineText = lines[i];
               if (lineText === undefined) continue;
               matches.push(`${prefix}${i + 1}: ${lineText}`);
@@ -111,7 +136,37 @@ export const regexSearchTool = {
           results.push(`${header}\n${matches.join("\n")}`);
           filesProcessed++;
         }
+      };
+
+      const workers: Promise<void>[] = [];
+      const totalFiles = files.length;
+
+      for (let workerIndex = 0; workerIndex < concurrency; workerIndex++) {
+        workers.push(
+          (async () => {
+            while (true) {
+              if (filesProcessed >= max_files) break;
+              if (timedOut) break;
+              const current = index;
+              if (current >= totalFiles) break;
+              index = current + 1;
+              const file = files[current];
+              if (!file) {
+                console.debug({
+                  message: "file missing for current index",
+                  current,
+                  totalFiles,
+                });
+                break;
+              }
+              console.debug({ current, totalFiles, file });
+              await processFile(file);
+            }
+          })(),
+        );
       }
+
+      await Promise.all(workers);
 
       if (results.length === 0) {
         if (timedOut) {

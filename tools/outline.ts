@@ -300,7 +300,6 @@ export const outlineTool = {
           { role: "user", content: userContent },
         ],
         temperature: 0,
-        thinking: { type: "disabled" }
       } as any);
 
       const messageContent = response.choices[0]?.message?.content;
