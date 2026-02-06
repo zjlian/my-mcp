@@ -1,43 +1,22 @@
 import { z } from "zod";
-import { mkdirSync, writeFileSync, existsSync, statSync } from "node:fs";
-import { basename, join, resolve as resolvePath } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { basename, join, relative } from "node:path";
+import { requireWorkspace } from "./workspace.js";
 
 export const writeReportTool = {
   name: "write_report",
   options: {
-    description: "在指定工作目录的 .docs 目录创建/覆盖 .md 文件，并返回生成文件的绝对路径",
+    description: "在当前工作目录的 .docs 目录创建/覆盖 .md 文件，并返回相对工作目录的路径",
     inputSchema: z.object({
-      workdir: z
-        .string()
-        .describe("当前工作目录的绝对路径，例如 \"c:\\\\workspace\\\\MCP\""),
       filename: z
         .string()
         .describe("报告文件名（必须以 .md 结尾），例如 \"daily-report.md\""),
       content: z.string().describe("要写入文件的 Markdown 文本内容"),
     }),
   },
-  handler: async ({
-    workdir,
-    filename,
-    content,
-  }: {
-    workdir: string;
-    filename: string;
-    content: string;
-  }) => {
+  handler: async ({ filename, content }: { filename: string; content: string }) => {
     try {
-      const base = resolvePath(workdir);
-      if (!existsSync(base) || !statSync(base).isDirectory()) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "错误：工作目录不存在或不是目录",
-            },
-          ],
-          isError: true as const,
-        };
-      }
+      const base = requireWorkspace();
 
       if (!filename.toLowerCase().endsWith(".md")) {
         return {
@@ -58,11 +37,13 @@ export const writeReportTool = {
       mkdirSync(docsDir, { recursive: true });
       writeFileSync(target, content, { encoding: "utf-8" });
 
+      const relativePath = relative(base, target) || name;
+
       return {
         content: [
           {
             type: "text" as const,
-            text: target,
+            text: relativePath,
           },
         ],
       };
@@ -79,4 +60,3 @@ export const writeReportTool = {
     }
   },
 };
-

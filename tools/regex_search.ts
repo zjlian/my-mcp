@@ -1,6 +1,8 @@
 import { globby } from "globby";
 import { readFile, stat } from "fs/promises";
 import { z } from "zod";
+import { isAbsolute, join } from "node:path";
+import { requireWorkspace, resolveInWorkspace } from "./workspace.js";
 
 const isBinaryBuffer = (buffer: Uint8Array): boolean => {
   const length = Math.min(buffer.length, 4096);
@@ -16,7 +18,11 @@ export const regexSearchTool = {
     description: "Search for a pattern in files using globby",
     inputSchema: z.object({
       pattern: z.string().describe("Regex pattern or string to search for"),
-      path: z.string().describe("File or directory absolute path to search in"),
+      path: z
+        .string()
+        .describe(
+          "File or directory path relative to current workspace. Absolute paths are not allowed.",
+        ),
       context_lines: z
         .number()
         .default(0)
@@ -45,27 +51,99 @@ export const regexSearchTool = {
     max_files: number;
   }) => {
     try {
+      const rawPath = typeof path === "string" ? path.trim() : "";
+      if (!rawPath) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "错误：path 参数不能为空",
+            },
+          ],
+          isError: true as const,
+        };
+      }
+
+      if (isAbsolute(rawPath)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "错误：regex_search 工具不允许使用绝对路径，请先调用 set_workspace 并使用相对当前工作目录的路径",
+            },
+          ],
+          isError: true as const,
+        };
+      }
+
+      const workspaceBase = (() => {
+        try {
+          return requireWorkspace();
+        } catch (err: any) {
+          throw new Error(err?.message ?? String(err));
+        }
+      })();
+
       const startTime = Date.now();
       const timeoutMs = 10000;
       let timedOut = false;
 
       let files: string[] = [];
 
-      try {
-        const stats = await stat(path);
+      const hasGlob =
+        rawPath.includes("*") ||
+        rawPath.includes("?") ||
+        rawPath.includes("[") ||
+        rawPath.includes("]");
 
-        if (stats.isFile()) {
-          files = [path];
-        } else if (stats.isDirectory()) {
-          files = await globby("**/*", {
-            cwd: path,
-            absolute: true,
-            onlyFiles: true,
-            gitignore: true,
-          });
+      if (!hasGlob) {
+        try {
+          const resolvedPath = resolveInWorkspace(rawPath);
+          try {
+            const stats = await stat(resolvedPath);
+
+            if (stats.isFile()) {
+              files = [resolvedPath];
+            } else if (stats.isDirectory()) {
+              files = await globby("**/*", {
+                cwd: resolvedPath,
+                absolute: true,
+                onlyFiles: true,
+                gitignore: true,
+              });
+            }
+          } catch {
+            files = await globby(resolvedPath, {
+              absolute: true,
+              onlyFiles: true,
+              gitignore: true,
+            });
+          }
+        } catch (err: any) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: err?.message ?? String(err),
+              },
+            ],
+            isError: true as const,
+          };
         }
-      } catch {
-        files = await globby(path, {
+      } else {
+        if (rawPath.includes("..")) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "错误：路径中不允许包含 .. 以防止越出当前工作目录",
+              },
+            ],
+            isError: true as const,
+          };
+        }
+        const patternAbs = join(workspaceBase, rawPath);
+        files = await globby(patternAbs, {
           absolute: true,
           onlyFiles: true,
           gitignore: true,

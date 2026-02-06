@@ -2,8 +2,9 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { mkdir, readFile as readFileFs, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { join, resolve, isAbsolute, normalize } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { homedir } from "node:os";
+import { resolveInWorkspace } from "./workspace.js";
 
 type OutlineCache = {
   get(filePath: string, content: string): Promise<string | null>;
@@ -191,7 +192,7 @@ export const outlineTool = {
   options: {
     description: "Generate a structured Markdown outline for a source file.",
     inputSchema: z.object({
-      path: z.string().describe("File absolute path"),
+      path: z.string().describe("File path relative to current workspace. Absolute paths are not allowed."),
     }),
   },
   handler: async ({ path }: { path: string }) => {
@@ -201,12 +202,37 @@ export const outlineTool = {
       const rawPath = typeof path === "string" ? path.trim() : "";
       if (!rawPath) {
         return {
-          content: [{ type: "text" as const, text: "Error: 'path' is required" }],
+          content: [{ type: "text" as const, text: "错误：path 参数不能为空" }],
           isError: true as const,
         };
       }
 
-      const resolvedPath = isAbsolute(rawPath) ? normalize(rawPath) : resolve(rawPath);
+      if (isAbsolute(rawPath)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "错误：outline 工具不允许使用绝对路径，请先调用 set_workspace 并使用相对当前工作目录的路径",
+            },
+          ],
+          isError: true as const,
+        };
+      }
+
+      let resolvedPath: string;
+      try {
+        resolvedPath = resolveInWorkspace(rawPath);
+      } catch (err: any) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: err?.message ?? String(err),
+            },
+          ],
+          isError: true as const,
+        };
+      }
 
       let st: { isFile(): boolean };
       try {
@@ -330,4 +356,3 @@ export const outlineTool = {
     }
   },
 };
-
