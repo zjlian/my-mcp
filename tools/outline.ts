@@ -1,15 +1,21 @@
 import OpenAI from "openai";
 import { z } from "zod";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile as readFileFs, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join, isAbsolute } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { resolveInWorkspace } from "./workspace.js";
 
 type OutlineCache = {
   get(filePath: string, content: string): Promise<string | null>;
   set(filePath: string, content: string, outline: string): Promise<void>;
 };
+
+const execFileAsync = promisify(execFile);
+const CPP_OUTLINE_SCRIPT_PATH = fileURLToPath(new URL("../scripts/cpp_outline.py", import.meta.url));
 
 const CACHE_DIR = join(homedir(), "mcp", "cache");
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -187,6 +193,40 @@ function guessFenceLanguage(filePath: string): string {
   return "";
 }
 
+function isCOrCppFile(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return (
+    lower.endsWith(".c") ||
+    lower.endsWith(".h") ||
+    lower.endsWith(".cc") ||
+    lower.endsWith(".cpp") ||
+    lower.endsWith(".cxx") ||
+    lower.endsWith(".hh") ||
+    lower.endsWith(".hpp") ||
+    lower.endsWith(".hxx") ||
+    lower.endsWith(".ipp") ||
+    lower.endsWith(".tpp") ||
+    lower.endsWith(".inl")
+  );
+}
+
+async function generateCppOutline(filePath: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      "python3",
+      [CPP_OUTLINE_SCRIPT_PATH, filePath],
+      { maxBuffer: 20 * 1024 * 1024 },
+    );
+    const out = stdout.trim();
+    if (!out) throw new Error("cpp_outline.py returned empty output");
+    return out;
+  } catch (err: any) {
+    const stderr = typeof err?.stderr === "string" ? err.stderr.trim() : "";
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(stderr ? `${msg}\n${stderr}` : msg);
+  }
+}
+
 export const outlineTool = {
   name: "outline",
   options: {
@@ -294,6 +334,26 @@ export const outlineTool = {
         return {
           content: [{ type: "text" as const, text: cached }],
         };
+      }
+
+      if (isCOrCppFile(rawPath)) {
+        try {
+          const outline = await generateCppOutline(resolvedPath);
+          await cache.set(resolvedPath, content, outline);
+          return {
+            content: [{ type: "text" as const, text: outline }],
+          };
+        } catch (err) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: cpp_outline failed - ${err instanceof Error ? err.message : String(err)}`,
+              },
+            ],
+            isError: true as const,
+          };
+        }
       }
 
       const apiKey = process.env.MCP_API_KEY?.trim();
