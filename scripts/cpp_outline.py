@@ -29,11 +29,12 @@ def format_tokens(tokens):
     replacements = [
         (" :: ", "::"), (" ::", "::"), (":: ", "::"),
         (" (", "("), ("( ", "("),
-        (" )", ")"), (" ) ", ") "),
-        (" , ", ", "), (" ,", ", "),
+        (" )", ")"),
+        (" ,", ","), (" , ", ", "), (",  ", ", "),
         (" < ", "<"), (" <", "<"), ("< ", "<"),
-        (" > ", ">"), (" >", ">"), ("> ", ">"),
-        (" & ", "& "), (" * ", "* "),
+        (" >", ">"),
+        (" & ", "& "), (" &", "&"),
+        (" * ", "* "), (" *", "*"),
         ("~ ", "~")
     ]
     
@@ -56,6 +57,8 @@ def get_raw_signature(cursor):
     param_depth = 0
     
     for t in cursor.get_tokens():
+        if t.kind == clang.cindex.TokenKind.COMMENT:
+            continue
         s = t.spelling
         
         # 记录小括号深度，以免被参数里的复杂符号干扰
@@ -99,6 +102,35 @@ def walk_ast(cursor, target_filepath, current_depth=0):
     for child in cursor.get_children():
         walk_ast(child, target_filepath, next_depth)
 
+def infer_include_dirs(abs_filepath):
+    file_dir = os.path.dirname(abs_filepath)
+    candidates = []
+
+    def add_dir(p):
+        if not p:
+            return
+        p = os.path.abspath(p)
+        if p in seen:
+            return
+        if os.path.isdir(p):
+            seen.add(p)
+            candidates.append(p)
+
+    seen = set()
+    add_dir(file_dir)
+
+    cur = file_dir
+    for _ in range(8):
+        for name in ("include", "inc", "Include", "Includes"):
+            add_dir(os.path.join(cur, name))
+
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
+    return candidates
+
 def process_file(filepath, compiler_args):
     if not os.path.exists(filepath):
         print(f"Error: File '{filepath}' not found.", file=sys.stderr)
@@ -107,8 +139,8 @@ def process_file(filepath, compiler_args):
     abs_filepath = os.path.abspath(filepath)
     index = clang.cindex.Index.create()
     
-    file_dir = os.path.dirname(abs_filepath)
-    compiler_args.append(f"-I{file_dir}")
+    for d in infer_include_dirs(abs_filepath):
+        compiler_args.append(f"-I{d}")
 
     try:
         # 当遇到找不到 Poco 等头文件时，这行仍会解析，只需忽略其语义类型错误即可
